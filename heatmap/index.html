@@ -2,114 +2,181 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Revenue Calendar Heatmap</title>
+<title>US Sales Heatmap</title>
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
-    background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-  #root { box-sizing: border-box; width: 100%; height: 100%; padding: 16px; overflow: auto; }
-  #title { font-size: 13px; font-weight: 600; color: #94a3b8; letter-spacing: 1.2px;
-    text-transform: uppercase; margin-bottom: 12px; }
-  .cell:hover { stroke: #ffffff; stroke-width: 1.5; }
-  #tooltip { position: fixed; background: #1e293b; color: #e2e8f0; padding: 6px 10px;
+    background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #root { width: 100%; height: 100%; position: relative; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #title { position: absolute; top: 8px; left: 12px; font-size: 11px; font-weight: 600;
+    color: #94a3b8; letter-spacing: 1.2px; text-transform: uppercase; }
+  #tooltip { position: fixed; background: #1e293b; color: #e2e8f0; padding: 8px 12px;
     border-radius: 6px; font-size: 12px; pointer-events: none; display: none; z-index: 100;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-  #legend { margin-top: 8px; display: flex; align-items: center; gap: 4px; font-size: 11px; color: #64748b; }
-  #legend .swatch { width: 16px; height: 16px; border-radius: 3px; }
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4); line-height: 1.5; }
+  #legend { position: absolute; bottom: 8px; left: 12px; display: flex; align-items: center;
+    gap: 4px; font-size: 10px; color: #64748b; }
+  #legend .bar { width: 120px; height: 10px; border-radius: 3px; }
 </style>
 </head>
 <body>
 <div id="root">
-  <div id="title">DAILY REVENUE HEATMAP</div>
-  <svg id="heatmap-svg" xmlns="http://www.w3.org/2000/svg"></svg>
-  <div id="legend"></div>
+  <div id="title">US SALES BY STORE LOCATION</div>
+  <canvas id="map"></canvas>
+  <div id="tooltip"></div>
+  <div id="legend">
+    <span>Low</span>
+    <div class="bar" style="background: linear-gradient(to right, #1e3a5f, #3b82f6, #60a5fa, #fbbf24, #ef4444);"></div>
+    <span>High</span>
+  </div>
 </div>
-<div id="tooltip"></div>
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/@sigmacomputing/plugin@1.2.0/dist/umd/sigmacomputing-plugin.umd.js"></script>
 <script>
 (function () {
   'use strict';
-  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  var DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  var PALETTE = ['#0f172a','#1e3a5f','#1d4ed8','#3b82f6','#60a5fa','#93c5fd'];
-  var tooltip = document.getElementById('tooltip');
+
+  // Albers-like projection for contiguous US (simplified)
+  function project(lat, lng, w, h) {
+    var cx = -98.5, cy = 39.5; // center of contiguous US
+    var scale = Math.min(w, h * 1.8) * 1.2;
+    var x = (lng - cx) * Math.cos(cy * Math.PI / 180) * (scale / 70) + w / 2;
+    var y = -(lat - cy) * (scale / 70) + h / 2 - h * 0.05;
+    return { x: x, y: y };
+  }
+
+  // Simple US outline (contiguous 48 boundary approximation)
+  var US_OUTLINE = [
+    [-124.7, 48.4], [-123.0, 48.4], [-122.8, 49.0], [-117.0, 49.0], [-116.0, 49.0],
+    [-104.0, 49.0], [-97.0, 49.0], [-95.1, 49.0], [-89.0, 48.0], [-84.0, 46.5],
+    [-82.5, 46.0], [-82.5, 43.0], [-79.0, 43.2], [-76.8, 43.6], [-75.0, 45.0],
+    [-71.0, 45.0], [-67.0, 44.8], [-67.0, 43.0], [-70.0, 42.0], [-71.0, 41.5],
+    [-72.0, 41.0], [-74.0, 40.5], [-74.0, 39.5], [-75.5, 39.0], [-75.5, 38.5],
+    [-76.0, 37.5], [-76.0, 36.5], [-75.5, 35.5], [-77.0, 34.5], [-79.0, 33.5],
+    [-80.5, 32.0], [-81.0, 31.0], [-81.5, 30.5], [-84.0, 30.0], [-85.0, 29.5],
+    [-87.5, 30.0], [-88.5, 30.0], [-89.5, 29.0], [-89.5, 28.5], [-91.0, 29.0],
+    [-93.5, 29.5], [-94.5, 29.0], [-97.0, 26.0], [-97.5, 25.8], [-99.0, 26.5],
+    [-103.0, 29.0], [-104.5, 29.5], [-106.5, 31.8], [-108.0, 31.3], [-111.0, 31.3],
+    [-114.8, 32.5], [-117.2, 32.5], [-118.5, 34.0], [-120.5, 34.5], [-121.0, 36.5],
+    [-122.5, 37.8], [-123.0, 39.0], [-124.0, 40.0], [-124.5, 42.0], [-124.5, 46.0],
+    [-124.7, 48.4]
+  ];
 
   function synth() {
-    var data = {}, d = new Date(2026, 6, 1);
-    while (d <= new Date(2026, 8, 30)) {
-      data[d.toISOString().slice(0,10)] = Math.floor(Math.random() * 80000) + 10000;
-      d.setDate(d.getDate() + 1);
+    var stores = [];
+    var lats = [40.7, 34.0, 41.9, 29.8, 33.4, 47.6, 39.7, 25.8, 38.9, 35.2,
+                42.4, 37.8, 30.3, 32.7, 36.2, 44.0, 39.1, 43.0, 35.5, 33.5];
+    var lngs = [-74.0, -118.2, -87.6, -95.4, -112.0, -122.3, -104.9, -80.2, -77.0, -80.8,
+                -71.1, -122.4, -97.7, -117.2, -86.8, -123.0, -84.5, -89.4, -97.5, -84.4];
+    var names = ['New York','Los Angeles','Chicago','Houston','Phoenix','Seattle','Denver',
+                 'Miami','Washington DC','Charlotte','Boston','San Francisco','Austin',
+                 'San Diego','Nashville','Portland','Cincinnati','Milwaukee','Oklahoma City','Atlanta'];
+    for (var i = 0; i < 20; i++) {
+      stores.push({ lat: lats[i], lng: lngs[i], value: Math.random() * 500000 + 50000, name: names[i] });
     }
-    return data;
+    return stores;
   }
 
-  function quantile(arr, q) {
-    var s = arr.slice().sort(function(a,b){return a-b;});
-    var p = (s.length-1)*q, b = Math.floor(p), r = p-b;
-    return s[b+1] !== undefined ? s[b]+r*(s[b+1]-s[b]) : s[b];
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function heatColor(frac) {
+    // blue -> light blue -> yellow -> red
+    if (frac < 0.33) {
+      var t = frac / 0.33;
+      return 'rgb(' + Math.round(lerp(30, 59, t)) + ',' + Math.round(lerp(58, 130, t)) + ',' + Math.round(lerp(95, 246, t)) + ')';
+    } else if (frac < 0.66) {
+      var t = (frac - 0.33) / 0.33;
+      return 'rgb(' + Math.round(lerp(59, 251, t)) + ',' + Math.round(lerp(130, 191, t)) + ',' + Math.round(lerp(246, 36, t)) + ')';
+    } else {
+      var t = (frac - 0.66) / 0.34;
+      return 'rgb(' + Math.round(lerp(251, 239, t)) + ',' + Math.round(lerp(191, 68, t)) + ',' + Math.round(lerp(36, 68, t)) + ')';
+    }
   }
 
-  function render(dayMap) {
-    var svg = document.getElementById('heatmap-svg');
-    var legend = document.getElementById('legend');
-    var dates = Object.keys(dayMap).sort();
-    if (!dates.length) { svg.innerHTML = ''; legend.innerHTML = '<span style="color:#64748b">No data</span>'; return; }
+  var canvas, ctx, storeData = [], lastW = 0, lastH = 0;
+  var tooltip = document.getElementById('tooltip');
 
-    var values = dates.map(function(k){return dayMap[k];});
-    var thresholds = [0];
-    for (var i=1;i<PALETTE.length;i++) thresholds.push(quantile(values, i/PALETTE.length));
-    function colorFor(v) { for (var j=PALETTE.length-1;j>=0;j--) if (v>=thresholds[j]) return PALETTE[j]; return PALETTE[0]; }
+  function render(stores) {
+    storeData = stores;
+    canvas = document.getElementById('map');
+    var root = document.getElementById('root');
+    var box = root.getBoundingClientRect();
+    var w = Math.max(200, box.width), h = Math.max(120, box.height);
+    canvas.width = w * 2; canvas.height = h * 2; // retina
+    canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+    ctx = canvas.getContext('2d');
+    ctx.scale(2, 2);
+    lastW = w; lastH = h;
 
-    var cellSize = 18, gap = 3, leftPad = 32, topPad = 18;
-    var firstDate = new Date(dates[0]+'T00:00:00');
-    var lastDate = new Date(dates[dates.length-1]+'T00:00:00');
-    var totalWeeks = Math.ceil((lastDate - firstDate)/(7*86400000)) + 2;
-    var svgW = leftPad + totalWeeks*(cellSize+gap) + 20;
-    var svgH = topPad + 7*(cellSize+gap) + 4;
-
-    var html = '';
-    var seenMonths = {};
-
-    for (var di=0; di<dates.length; di++) {
-      var dt = new Date(dates[di]+'T00:00:00');
-      var daysSince = Math.round((dt - firstDate)/86400000);
-      var dow = (dt.getDay()+6)%7;
-      var wk = Math.floor((daysSince + ((firstDate.getDay()+6)%7))/7);
-      var x = leftPad + wk*(cellSize+gap);
-      var y = topPad + dow*(cellSize+gap);
-      var val = dayMap[dates[di]]||0;
-      html += '<rect class="cell" x="'+x+'" y="'+y+'" width="'+cellSize+'" height="'+cellSize+
-        '" rx="3" fill="'+colorFor(val)+'" data-date="'+dates[di]+'" data-val="'+Math.round(val)+'"/>';
-      var mk = dt.getFullYear()+'-'+dt.getMonth();
-      if (!seenMonths[mk] && dt.getDate()<=7) {
-        seenMonths[mk]=true;
-        html += '<text x="'+x+'" y="'+(topPad-5)+'" font-size="10" fill="#64748b">'+MONTHS[dt.getMonth()]+'</text>';
-      }
+    // Draw US outline
+    ctx.beginPath();
+    for (var i = 0; i < US_OUTLINE.length; i++) {
+      var p = project(US_OUTLINE[i][1], US_OUTLINE[i][0], w, h);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
     }
-    for (var d=0;d<7;d++) {
-      if (d%2===0) html += '<text x="'+(leftPad-4)+'" y="'+(topPad+d*(cellSize+gap)+cellSize-4)+'" text-anchor="end" font-size="9" fill="#475569">'+DAYS[d]+'</text>';
+    ctx.closePath();
+    ctx.fillStyle = '#0f172a';
+    ctx.fill();
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    if (!stores.length) return;
+
+    var vals = stores.map(function(s){return s.value;});
+    var minV = Math.min.apply(null, vals), maxV = Math.max.apply(null, vals);
+    var range = maxV - minV || 1;
+
+    // Sort so smaller circles draw on top
+    var sorted = stores.slice().sort(function(a,b){return b.value - a.value;});
+
+    for (var i = 0; i < sorted.length; i++) {
+      var s = sorted[i];
+      var p = project(s.lat, s.lng, w, h);
+      var frac = (s.value - minV) / range;
+      var r = Math.max(4, Math.min(18, 4 + frac * 14));
+      var color = heatColor(frac);
+
+      // Glow
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
+      ctx.fillStyle = color.replace('rgb', 'rgba').replace(')', ',0.15)');
+      ctx.fill();
+
+      // Circle
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
     }
-
-    svg.setAttribute('width', svgW); svg.setAttribute('height', svgH);
-    svg.innerHTML = html;
-
-    // Legend
-    var minV = Math.min.apply(null, values), maxV = Math.max.apply(null, values);
-    legend.innerHTML = '<span>$'+Math.round(minV/1000)+'k</span>';
-    for (var li=0;li<PALETTE.length;li++) legend.innerHTML += '<div class="swatch" style="background:'+PALETTE[li]+'"></div>';
-    legend.innerHTML += '<span>$'+Math.round(maxV/1000)+'k</span>';
-
-    // Tooltips
-    svg.querySelectorAll('.cell').forEach(function(el) {
-      el.addEventListener('mousemove', function(e) {
-        tooltip.style.display = 'block';
-        tooltip.style.left = (e.clientX+12)+'px';
-        tooltip.style.top = (e.clientY-30)+'px';
-        tooltip.textContent = el.dataset.date + ': $' + Number(el.dataset.val).toLocaleString();
-      });
-      el.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
-    });
   }
+
+  // Tooltip on hover
+  document.getElementById('map').addEventListener('mousemove', function(e) {
+    var rect = canvas.getBoundingClientRect();
+    var mx = (e.clientX - rect.left), my = (e.clientY - rect.top);
+    var hit = null, minDist = 20;
+    for (var i = 0; i < storeData.length; i++) {
+      var p = project(storeData[i].lat, storeData[i].lng, lastW, lastH);
+      var dx = p.x - mx, dy = p.y - my;
+      var dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < minDist) { minDist = dist; hit = storeData[i]; }
+    }
+    if (hit) {
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY - 40) + 'px';
+      tooltip.innerHTML = '<strong>' + (hit.name || 'Store') + '</strong><br>Revenue: $' + Math.round(hit.value).toLocaleString();
+    } else {
+      tooltip.style.display = 'none';
+    }
+  });
+  document.getElementById('map').addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
 
   render(synth());
 
@@ -117,32 +184,37 @@
   if (client) {
     client.config.configureEditorPanel([
       { name: 'source', type: 'element' },
-      { name: 'date', type: 'column', source: 'source', allowMultiple: false },
-      { name: 'value', type: 'column', source: 'source', allowMultiple: false }
+      { name: 'lat', type: 'column', source: 'source', allowMultiple: false, label: 'Latitude' },
+      { name: 'lng', type: 'column', source: 'source', allowMultiple: false, label: 'Longitude' },
+      { name: 'value', type: 'column', source: 'source', allowMultiple: false, label: 'Revenue' },
+      { name: 'label', type: 'column', source: 'source', allowMultiple: false, label: 'Store Name' }
     ]);
     var unsubData = null;
     client.config.subscribe(function (config) {
       var sourceId = config && config.source;
       if (unsubData) { unsubData(); unsubData = null; }
-      if (!sourceId || !config.date || !config.value) { render(synth()); return; }
+      if (!sourceId || !config.lat || !config.lng || !config.value) { render(synth()); return; }
       unsubData = client.elements.subscribeToElementData(sourceId, function (data) {
         try {
-          var dc = data[config.date], vc = data[config.value];
-          if (!dc || !vc) { render(synth()); return; }
-          var m = {};
-          for (var i=0;i<dc.length;i++) {
-            var d = typeof dc[i]==='number' ? new Date(dc[i]) : new Date(String(dc[i]));
-            if (isNaN(d.getTime())) continue;
-            var k = d.toISOString().slice(0,10);
-            m[k] = (m[k]||0) + Number(vc[i]||0);
+          var latC = data[config.lat], lngC = data[config.lng], valC = data[config.value];
+          var lblC = config.label ? data[config.label] : null;
+          if (!latC || !lngC || !valC) { render(synth()); return; }
+          var stores = [];
+          for (var i = 0; i < latC.length; i++) {
+            var la = Number(latC[i]), lo = Number(lngC[i]), v = Number(valC[i]);
+            if (isFinite(la) && isFinite(lo) && isFinite(v)) {
+              stores.push({ lat: la, lng: lo, value: v, name: lblC ? String(lblC[i]) : '' });
+            }
           }
-          render(m);
+          render(stores);
         } catch(e) { render(synth()); }
       });
     });
   }
 
-  new ResizeObserver(function(){}).observe(document.getElementById('root'));
+  new ResizeObserver(function () {
+    render(storeData.length ? storeData : synth());
+  }).observe(document.getElementById('root'));
 })();
 </script>
 </body>
